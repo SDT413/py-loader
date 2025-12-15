@@ -4,16 +4,9 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="d98db1a7-7639-48e7-995d-c6be0d8d1f77" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/.idea/inspectionProfiles/profiles_settings.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/modules.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/py-loader.iml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/ffmpeg.exe" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/ffplay.exe" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/ffprobe.exe" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
+    <list default="true" id="d98db1a7-7639-48e7-995d-c6be0d8d1f77" name="Changes" comment="PyLoader">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -62,7 +55,20 @@
       <option name="presentableId" value="Default" />
       <updated>1765809384280</updated>
     </task>
+    <task id="LOCAL-00001" summary="PyLoader">
+      <option name="closed" value="true" />
+      <created>1765811780938</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1765811780938</updated>
+    </task>
+    <option name="localTasksCounter" value="2" />
     <servers />
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="PyLoader" />
+    <option name="LAST_COMMIT_MESSAGE" value="PyLoader" />
   </component>
   <component name="github-copilot-workspace">
     <instructionFileLocations>
