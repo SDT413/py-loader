@@ -966,9 +966,15 @@ HTML_TEMPLATE = """
                 <div id="playlist-preview" style="display: none;"></div>
                 
                 <div class="input-controls">
-                    <select class="format-select" id="format">
+                    <select class="format-select" id="format" onchange="onFormatChange()">
                         <option value="mp3">🎵 Audio (MP3)</option>
                         <option value="mp4">🎬 Video (MP4)</option>
+                    </select>
+                    <select class="format-select" id="quality" onchange="onQualityChange()" style="display: none;">
+                        <option value="max">⚡ Макс. качество</option>
+                        <option value="1080">📺 1080p</option>
+                        <option value="720">📺 720p</option>
+                        <option value="480">📺 480p</option>
                     </select>
                     <button class="btn btn-primary" onclick="startDownload()">
                         ⬇️ Скачать
@@ -1135,8 +1141,9 @@ HTML_TEMPLATE = """
         
         function downloadPlaylist(mode) {
             if (!currentPlaylistData) return;
-            
+
             const format = document.getElementById('format').value;
+            const quality = document.getElementById('quality').value;
             let urls = [];
             
             if (mode === 'all') {
@@ -1153,7 +1160,7 @@ HTML_TEMPLATE = """
             fetch('/add_download', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ urls, format })
+                body: JSON.stringify({ urls, format, quality })
             })
             .then(res => res.json())
             .then(data => {
@@ -1173,6 +1180,25 @@ HTML_TEMPLATE = """
             currentPlaylistData = null;
         }
         
+        // === FORMAT / QUALITY PREFERENCES ===
+        function onFormatChange() {
+            const format = document.getElementById('format').value;
+            document.getElementById('quality').style.display = format === 'mp4' ? 'block' : 'none';
+            localStorage.setItem('pyloader_format', format);
+        }
+
+        function onQualityChange() {
+            localStorage.setItem('pyloader_quality', document.getElementById('quality').value);
+        }
+
+        function restorePreferences() {
+            const savedFormat = localStorage.getItem('pyloader_format');
+            const savedQuality = localStorage.getItem('pyloader_quality');
+            if (savedFormat) document.getElementById('format').value = savedFormat;
+            if (savedQuality) document.getElementById('quality').value = savedQuality;
+            onFormatChange();
+        }
+
         // === DOWNLOAD FUNCTIONS ===
         function startDownload() {
             // Если есть плейлист — используем его данные
@@ -1183,6 +1209,7 @@ HTML_TEMPLATE = """
             
             const urlsText = document.getElementById('urls').value;
             const format = document.getElementById('format').value;
+            const quality = document.getElementById('quality').value;
             const urls = urlsText.split('\\n').map(u => u.trim()).filter(u => u.length > 0);
 
             if (urls.length === 0) {
@@ -1193,7 +1220,7 @@ HTML_TEMPLATE = """
             fetch('/add_download', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ urls, format })
+                body: JSON.stringify({ urls, format, quality })
             })
             .then(res => res.json())
             .then(data => {
@@ -1433,6 +1460,7 @@ HTML_TEMPLATE = """
         });
         
         // === INIT ===
+        restorePreferences();
         setInterval(updateProgress, 1000);
         loadHistory();
         loadStats();
@@ -1458,6 +1486,24 @@ def progress_hook(d, task_id):
     elif d['status'] == 'finished':
         download_status[task_id]['percent'] = "100%"
         download_status[task_id]['status'] = "Обработка..."
+
+
+def build_mp4_format(quality):
+    """Строит format-строку yt-dlp для MP4 под выбранное качество.
+
+    quality: 'max' (или пусто) — лучшее доступное, либо '1080'/'720'/'480' —
+    ограничение по высоте кадра.
+    """
+    if quality and quality != 'max':
+        try:
+            h = int(quality)
+            return (
+                f'bestvideo[ext=mp4][height<={h}]+bestaudio[ext=m4a]/'
+                f'best[ext=mp4][height<={h}]/best[height<={h}]/best[ext=mp4]/best'
+            )
+        except ValueError:
+            pass
+    return 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
 
 
 def get_ffmpeg_path():
@@ -1515,7 +1561,7 @@ def save_thumbnail_from_url(video_title, thumbnail_url):
         pass
 
 
-def download_task(task_id, url, fmt):
+def download_task(task_id, url, fmt, quality='max'):
     try:
         if task_id in cancelled_tasks:
             download_status[task_id]['status'] = "Отменено"
@@ -1546,7 +1592,8 @@ def download_task(task_id, url, fmt):
             })
         else:
             ydl_opts.update({
-                'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+                'format': build_mp4_format(quality),
+                'merge_output_format': 'mp4',
                 'postprocessors': [
                     {'key': 'FFmpegThumbnailsConvertor', 'format': 'jpg'},
                     {'key': 'EmbedThumbnail'},
@@ -1622,6 +1669,7 @@ def add_download():
     data = request.json
     urls = data.get('urls', [])
     fmt = data.get('format', 'mp3')
+    quality = data.get('quality', 'max')
     added = 0
     skipped = 0
 
@@ -1641,7 +1689,7 @@ def add_download():
             'title': 'Получение данных...',
             'format': fmt
         }
-        executor.submit(download_task, task_id, normalized_url, fmt)
+        executor.submit(download_task, task_id, normalized_url, fmt, quality)
         added += 1
 
     return jsonify({'status': 'ok', 'added': added, 'skipped': skipped})
