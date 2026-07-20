@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# User media and local application index
+downloads/
+
+# Local IDE state
+.idea/*.xml
+!.idea/modules.xml

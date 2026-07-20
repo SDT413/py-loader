@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>PyLoader — YouTube downloader</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body>
+    <div class="ambient ambient-one"></div>
+    <div class="ambient ambient-two"></div>
+
+    <header class="topbar">
+        <a class="brand" href="/" aria-label="PyLoader — главная">
+            <span class="brand-mark" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M12 3v11m0 0 4-4m-4 4-4-4M5 17v2h14v-2"/></svg>
+            </span>
+            <span><strong>PyLoader</strong><small>local media studio</small></span>
+        </a>
+        <div class="system-badges" id="system-badges" aria-label="Состояние системы">
+            <span class="badge muted">Проверка системы…</span>
+        </div>
+        <button class="button ghost compact" id="open-folder-button" type="button">
+            <svg viewBox="0 0 24 24"><path d="M3 6h7l2 2h9v10H3z"/></svg>
+            Открыть папку
+        </button>
+    </header>
+
+    <main class="shell">
+        <section class="hero panel">
+            <div class="hero-copy">
+                <span class="eyebrow">Ссылки → файлы</span>
+                <h1>Скачивай без суеты.<br><span>В нужном качестве.</span></h1>
+                <p>Видео, музыка, плейлисты и каналы. PyLoader сам найдёт повторы, сохранит порядок и покажет честный результат.</p>
+            </div>
+
+            <div class="composer">
+                <label class="field-label" for="urls-input">Ссылки YouTube — по одной на строку</label>
+                <div class="url-box">
+                    <textarea id="urls-input" rows="5" spellcheck="false" placeholder="https://www.youtube.com/watch?v=…&#10;https://www.youtube.com/playlist?list=…"></textarea>
+                    <button class="icon-button paste-button" id="paste-button" type="button" title="Вставить из буфера" aria-label="Вставить из буфера">
+                        <svg viewBox="0 0 24 24"><path d="M9 5h6m-7 3H5v13h14V8h-3M9 3h6v4H9z"/></svg>
+                    </button>
+                </div>
+
+                <div class="quick-settings">
+                    <div class="segmented" role="group" aria-label="Тип загрузки">
+                        <button class="segment active" data-mode="audio" type="button">Аудио</button>
+                        <button class="segment" data-mode="video" type="button">Видео</button>
+                    </div>
+                    <label class="select-field">
+                        <span>Формат</span>
+                        <select id="format-select">
+                            <option value="mp3">MP3</option>
+                            <option value="m4a">M4A</option>
+                            <option value="opus">OPUS</option>
+                        </select>
+                    </label>
+                    <label class="select-field" id="bitrate-field">
+                        <span>Битрейт</span>
+                        <select id="bitrate-select">
+                            <option value="128">128 кбит/с</option>
+                            <option value="192" selected>192 кбит/с</option>
+                            <option value="256">256 кбит/с</option>
+                            <option value="320">320 кбит/с</option>
+                        </select>
+                    </label>
+                    <label class="select-field hidden" id="quality-field">
+                        <span>Качество</span>
+                        <select id="quality-select">
+                            <option value="max">Максимум</option>
+                            <option value="4320">8K · 4320p</option>
+                            <option value="2160">4K · 2160p</option>
+                            <option value="1440">2K · 1440p</option>
+                            <option value="1080">Full HD · 1080p</option>
+                            <option value="720">HD · 720p</option>
+                            <option value="480">480p</option>
+                        </select>
+                    </label>
+                </div>
+
+                <details class="smart-settings" id="smart-settings">
+                    <summary>
+                        <span><svg viewBox="0 0 24 24"><path d="M12 3v2m0 14v2M3 12h2m14 0h2M5.6 5.6 7 7m10 10 1.4 1.4M18.4 5.6 17 7M7 17l-1.4 1.4M9 12a3 3 0 1 0 6 0 3 3 0 0 0-6 0z"/></svg> Smart Mode</span>
+                        <small>Дедупликация, папки, субтитры и доступ</small>
+                    </summary>
+                    <div class="settings-grid">
+                        <label class="toggle-row">
+                            <input type="checkbox" id="skip-duplicates" checked>
+                            <span class="toggle"></span>
+                            <span><strong>Пропускать повторы</strong><small>По YouTube ID и формату</small></span>
+                        </label>
+                        <label class="toggle-row">
+                            <input type="checkbox" id="organize-playlists">
+                            <span class="toggle"></span>
+                            <span><strong>Папки плейлистов</strong><small>Каждая коллекция отдельно</small></span>
+                        </label>
+                        <label class="toggle-row">
+                            <input type="checkbox" id="numerate-playlists">
+                            <span class="toggle"></span>
+                            <span><strong>Сохранять порядок</strong><small>001, 002, 003…</small></span>
+                        </label>
+                        <label class="toggle-row video-only hidden">
+                            <input type="checkbox" id="subtitles-enabled">
+                            <span class="toggle"></span>
+                            <span><strong>Встроить субтитры</strong><small>SRT, если доступны</small></span>
+                        </label>
+                        <label class="select-field">
+                            <span>Cookies браузера</span>
+                            <select id="cookies-browser">
+                                <option value="none">Не использовать</option>
+                                <option value="chrome">Chrome</option>
+                                <option value="edge">Edge</option>
+                                <option value="firefox">Firefox</option>
+                                <option value="brave">Brave</option>
+                            </select>
+                        </label>
+                        <label class="text-field video-only hidden">
+                            <span>Языки субтитров</span>
+                            <input id="subtitle-languages" value="ru,en" placeholder="ru,en">
+                        </label>
+                        <label class="toggle-row video-only hidden">
+                            <input type="checkbox" id="auto-subtitles">
+                            <span class="toggle"></span>
+                            <span><strong>Автосубтитры</strong><small>Если ручных нет</small></span>
+                        </label>
+                        <label class="text-field wide">
+                            <span>Прокси — необязательно</span>
+                            <input id="proxy-input" placeholder="socks5://127.0.0.1:1080">
+                        </label>
+                    </div>
+                </details>
+
+                <div class="composer-actions">
+                    <button class="button secondary" id="inspect-button" type="button">
+                        <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg>
+                        Анализировать
+                    </button>
+                    <button class="button primary" id="download-button" type="button">
+                        <svg viewBox="0 0 24 24"><path d="M12 3v11m0 0 4-4m-4 4-4-4M5 19h14"/></svg>
+                        Скачать всё уникальное
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <section class="analysis panel hidden" id="analysis-panel" aria-live="polite">
+            <div class="section-heading">
+                <div>
+                    <span class="eyebrow">Результат анализа</span>
+                    <h2 id="analysis-title">Найденные материалы</h2>
+                </div>
+                <div class="analysis-actions">
+                    <button class="button ghost compact" id="select-all-button" type="button">Выбрать всё</button>
+                    <button class="button ghost compact" id="select-none-button" type="button">Снять выбор</button>
+                </div>
+            </div>
+            <div class="summary-strip" id="analysis-summary"></div>
+            <div class="analysis-toolbar">
+                <label class="search-box">
+                    <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg>
+                    <input id="analysis-search" placeholder="Поиск внутри найденного">
+                </label>
+                <span id="selected-count">0 выбрано</span>
+            </div>
+            <div class="source-list" id="source-list"></div>
+            <div class="item-list" id="analysis-items"></div>
+            <div class="analysis-footer">
+                <span id="analysis-note"></span>
+                <button class="button primary" id="download-selected-button" type="button">Скачать выбранное</button>
+            </div>
+        </section>
+
+        <section class="dashboard-grid">
+            <div class="queue panel">
+                <div class="section-heading">
+                    <div>
+                        <span class="eyebrow">Очередь</span>
+                        <h2>Загрузки <span class="count-pill" id="active-count">0</span></h2>
+                    </div>
+                    <button class="button ghost compact" id="clear-jobs-button" type="button">Очистить готовые</button>
+                </div>
+                <div class="empty-state" id="queue-empty">
+                    <span class="empty-icon">↓</span>
+                    <strong>Очередь пуста</strong>
+                    <p>Добавь одну ссылку или целую коллекцию.</p>
+                </div>
+                <div class="job-list" id="job-list"></div>
+            </div>
+
+            <aside class="stats-stack">
+                <div class="metric-card panel accent-card">
+                    <span class="metric-label">Медиатека</span>
+                    <strong id="stat-total">0</strong>
+                    <small id="stat-breakdown">0 аудио · 0 видео</small>
+                </div>
+                <div class="metric-card panel">
+                    <span class="metric-label">На диске</span>
+                    <strong id="stat-size">0 B</strong>
+                    <small id="stat-path">Загрузка…</small>
+                </div>
+                <div class="metric-card panel">
+                    <span class="metric-label">Параллельно</span>
+                    <strong id="stat-workers">3</strong>
+                    <small>бережный режим для YouTube</small>
+                </div>
+            </aside>
+        </section>
+
+        <section class="library panel">
+            <div class="section-heading library-heading">
+                <div>
+                    <span class="eyebrow">Локальные файлы</span>
+                    <h2>Медиатека</h2>
+                </div>
+                <div class="library-tools">
+                    <label class="search-box">
+                        <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg>
+                        <input id="library-search" placeholder="Название, плейлист…">
+                    </label>
+                    <select id="library-filter" aria-label="Фильтр медиатеки">
+                        <option value="all">Все</option>
+                        <option value="audio">Аудио</option>
+                        <option value="video">Видео</option>
+                        <option value="mp3">MP3</option>
+                        <option value="mp4">MP4</option>
+                    </select>
+                    <select id="library-sort" aria-label="Сортировка медиатеки">
+                        <option value="date">Сначала новые</option>
+                        <option value="name">По названию</option>
+                        <option value="size">По размеру</option>
+                    </select>
+                    <button class="icon-button" id="reindex-button" type="button" title="Пересканировать файлы" aria-label="Пересканировать файлы">
+                        <svg viewBox="0 0 24 24"><path d="M20 6v5h-5M4 18v-5h5M6.1 8a7 7 0 0 1 11.3-2L20 9M4 15l2.6 3A7 7 0 0 0 18 16"/></svg>
+                    </button>
+                </div>
+            </div>
+            <div class="library-grid" id="library-grid"></div>
+            <div class="load-more-wrap hidden" id="library-more-wrap">
+                <button class="button ghost" id="library-more-button" type="button">Показать ещё</button>
+            </div>
+            <div class="empty-state hidden" id="library-empty">
+                <span class="empty-icon">♫</span>
+                <strong>Ничего не найдено</strong>
+                <p>Измени фильтр или скачай первый файл.</p>
+            </div>
+        </section>
+    </main>
+
+    <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
+    <script src="{{ url_for('static', filename='app.js') }}" defer></script>
+</body>
+</html>
