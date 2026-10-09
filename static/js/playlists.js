@@ -164,7 +164,8 @@ export function init() {
     bindTrackList(content, {
         getItems: () => detail.items,
         playlistId: () => (detail.kind === "playlist" ? detail.playlist?.id : null),
-        onReorder: (ids) => { if (detail.kind === "playlist") reorder(ids); },
+        onReorder: reorder,
+        canReorder: () => detail.kind === "playlist",
     });
 
     $("#new-playlist-button").addEventListener("click", () => createPlaylistFlow());

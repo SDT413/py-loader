@@ -20,7 +20,7 @@ export function applySelection(container, selection) {
  * (or null when the list has no selection), options.onReorder(ids) enables drag reordering.
  */
 export function bindTrackList(container, options) {
-    const { getItems, selection = null, onSelectionChange = () => {}, onSelectAll = null, playlistId = () => null, onReorder = null } = options;
+    const { getItems, selection = null, onSelectionChange = () => {}, onSelectAll = null, playlistId = () => null, onReorder = null, canReorder = () => true } = options;
     let anchor = null;
     let dragId = null;
 
@@ -97,9 +97,10 @@ export function bindTrackList(container, options) {
         if (!node) return;
         const id = node.dataset.id;
         const ids = selection && selection.has(id) && selection.size > 1 ? [...selection] : [id];
-        event.dataTransfer.effectAllowed = onReorder ? "copyMove" : "copy";
+        const sortable = Boolean(onReorder) && canReorder();
+        event.dataTransfer.effectAllowed = sortable ? "copyMove" : "copy";
         event.dataTransfer.setData(DRAG_IDS, JSON.stringify(ids));
-        if (onReorder) {
+        if (sortable) {
             event.dataTransfer.setData(DRAG_REORDER, id);
             dragId = id;
             node.classList.add("dragging");

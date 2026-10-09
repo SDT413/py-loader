@@ -131,9 +131,15 @@
         if (event.target.closest("[data-back]")) { state.playlist = null; load(); return; }
         if (event.target.closest("[data-play-all]")) { play(state.items, 0); return; }
         if (event.target.closest("[data-shuffle]")) {
-            const shuffled = [...state.items].sort(() => Math.random() - 0.5);
-            state.items = shuffled;
-            play(shuffled, 0);
+            const queue = state.items.filter((item) => item.media_type !== "video");
+            for (let index = queue.length - 1; index > 0; index -= 1) {
+                const swap = Math.floor(Math.random() * (index + 1));
+                [queue[index], queue[swap]] = [queue[swap], queue[index]];
+            }
+            if (!queue.length) return;
+            state.queue = queue;
+            state.index = 0;
+            start();
             return;
         }
         const playlist = event.target.closest("[data-playlist]");

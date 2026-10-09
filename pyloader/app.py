@@ -4,6 +4,7 @@ import mimetypes
 import os
 import shutil
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -148,16 +149,36 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
             return jsonify({"ok": False, "error": message}), status
         return f"Ошибка: {message}", status
 
-    def delete_media(record: dict[str, Any]) -> None:
-        path = _inside(download_root, record["filename"])
-        if path.is_file():
-            path.unlink()
-        library.remove(record["filename"])
-        thumb_name = record.get("thumbnail")
-        if thumb_name and not any(row.get("thumbnail") == thumb_name for row in library.list()):
-            thumbnail = _inside(thumbnails_root, thumb_name)
-            if thumbnail.is_file():
-                thumbnail.unlink()
+    def unlink(path: Path) -> None:
+        # On Windows a file that is still being streamed to the player is locked
+        # for a moment after playback stops, so retry briefly before giving up.
+        for attempt in range(6):
+            try:
+                path.unlink(missing_ok=True)
+                return
+            except PermissionError:
+                if attempt == 5:
+                    raise ValueError(f"Файл занят другой программой: {path.name}") from None
+                time.sleep(0.25)
+
+    def delete_media(records: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
+        """Delete files one by one; a locked file does not stop the rest."""
+        deleted, failed = [], []
+        for record in records:
+            try:
+                unlink(_inside(download_root, record["filename"]))
+                deleted.append(record)
+            except (OSError, ValueError):
+                failed.append(record["filename"])
+        if deleted:
+            library.remove_many(record["filename"] for record in deleted)
+            in_use = library.thumbnails_in_use()
+            for thumb_name in {record.get("thumbnail") for record in deleted} - in_use - {None}:
+                try:
+                    unlink(_inside(thumbnails_root, thumb_name))
+                except (OSError, ValueError):
+                    pass
+        return deleted, failed
 
     # -- pages -----------------------------------------------------------
     @app.get("/")
@@ -207,7 +228,7 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
 
     @app.post("/api/jobs/<job_id>/cancel")
     def api_cancel_job(job_id: str):
-        if not manager.jobs.cancel(job_id):
+        if not manager.cancel(job_id):
             return jsonify({"ok": False, "error": "Задача не найдена"}), 404
         return jsonify({"ok": True})
 
@@ -223,7 +244,7 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
 
     @app.post("/api/jobs/cancel-all")
     def api_cancel_all():
-        return jsonify({"ok": True, "cancelled": manager.jobs.cancel_all()})
+        return jsonify({"ok": True, "cancelled": manager.cancel_all()})
 
     @app.post("/api/jobs/retry-failed")
     def api_retry_failed():
@@ -303,14 +324,13 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
             if not path.is_file():
                 return jsonify({"ok": False, "error": "Файл не найден"}), 404
             records = [library.by_filename(filename) or {"filename": filename}]
-        deleted_ids = []
-        for record in records:
-            delete_media(record)
-            if record.get("id"):
-                deleted_ids.append(record["id"])
+        deleted, failed = delete_media(records)
+        deleted_ids = [record["id"] for record in deleted if record.get("id")]
         playlists.forget_media(deleted_ids)
         bridge.outbox_remove(deleted_ids)
-        return jsonify({"ok": True, "deleted": len(records)})
+        if failed and not deleted:
+            raise ValueError(f"Файл занят другой программой: {Path(failed[0]).name}")
+        return jsonify({"ok": True, "deleted": len(deleted), "deleted_ids": deleted_ids, "failed": failed})
 
     @app.post("/api/open-folder")
     def api_open_folder():
@@ -475,8 +495,9 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
             return jsonify({"ok": True, "testing": True})
 
         def stop() -> None:
-            manager.jobs.cancel_all()
-            bridge.stop()
+            # The bridge is not stopped explicitly: that would persist "disabled"
+            # and it should come back on the next launch if the user left it on.
+            manager.cancel_all()
             os._exit(0)
 
         threading.Timer(0.4, stop).start()

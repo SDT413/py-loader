@@ -32,6 +32,8 @@ const state = {
     summary: { active: 0 },
     filter: "all",
     pollTimer: null,
+    pollSeq: 0,
+    appliedSeq: 0,
     wasActive: false,
     libraryRevision: null,
 };
@@ -403,9 +405,13 @@ function notifyDrained() {
 
 export async function pollJobs() {
     window.clearTimeout(state.pollTimer);
+    const seq = ++state.pollSeq;
     try {
         const query = new URLSearchParams({ since: String(state.version), epoch: state.epoch || "" });
         const data = await api(`/api/jobs?${query}`);
+        // Polls can overlap (timer + manual refresh); never apply an older answer over a newer one.
+        if (seq < state.appliedSeq) return;
+        state.appliedSeq = seq;
         if (data.full) state.jobs.clear();
         const changed = new Set();
         for (const job of data.jobs) {
@@ -427,6 +433,7 @@ export async function pollJobs() {
     } catch (error) {
         console.error("Job refresh failed", error);
     }
+    if (seq !== state.pollSeq) return;
     const delay = state.summary.active ? 1000 : document.hidden ? 6000 : 3000;
     state.pollTimer = window.setTimeout(pollJobs, delay);
 }

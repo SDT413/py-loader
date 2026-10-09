@@ -107,6 +107,7 @@ class AppTests(unittest.TestCase):
 
         deleted = self.client.delete("/api/library", json={"ids": [one["id"]]}).get_json()
         self.assertEqual(deleted["deleted"], 1)
+        self.assertEqual(deleted["deleted_ids"], [one["id"]])
         playlist = self.client.get(f"/api/playlists/{playlist['id']}").get_json()["playlist"]
         self.assertEqual(playlist["ids"], [two["id"]])
         outbox = self.client.get("/api/bridge").get_json()["outbox"]
@@ -166,6 +167,22 @@ class AppTests(unittest.TestCase):
         self.assertIn(b'xmlns="http://www.w3.org/2000/svg"', qr.get_data())
         after = self.client.post("/api/bridge/token").get_json()
         self.assertNotEqual(before["connect_url"], after["connect_url"])
+
+    def test_bulk_delete_keeps_shared_thumbnails_and_removes_orphans(self):
+        library = self.app.extensions["pyloader_library"]
+        thumbs = Path(library.thumbnails_root)
+        (thumbs / "shared.jpg").write_bytes(b"x")
+        (thumbs / "own.jpg").write_bytes(b"x")
+        records = []
+        for name, thumb in (("a", "shared.jpg"), ("b", "shared.jpg"), ("c", "own.jpg")):
+            path = Path(library.download_root) / f"{name}.mp3"
+            path.write_bytes(b"audio")
+            records.append(library.register(path, {"id": f"abcdefghij{name}", "title": name}, {"format": "mp3"}, thumb))
+        result = self.client.delete("/api/library", json={"ids": [records[0]["id"], records[2]["id"]]}).get_json()
+        self.assertEqual(result["deleted"], 2)
+        self.assertTrue((thumbs / "shared.jpg").exists())
+        self.assertFalse((thumbs / "own.jpg").exists())
+        self.assertEqual([row["id"] for row in library.list()], [records[1]["id"]])
 
     def test_shutdown_requires_confirmation(self):
         self.assertEqual(self.client.post("/api/shutdown", json={}).status_code, 400)

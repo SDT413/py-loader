@@ -283,6 +283,22 @@ class DownloadManagerTests(unittest.TestCase):
         self.assertEqual(len(ids), 2)
         self.assertEqual(self.manager.active_count(), 2)
 
+    def test_cancelled_queued_job_can_be_retried_immediately(self):
+        job_id = self.enqueue("abcdefghij1")["job_ids"][0]
+        self.assertTrue(self.manager.cancel(job_id))
+        result = self.manager.retry(job_id)
+        self.assertEqual(result["added"], 1)
+        self.assertEqual(result["skipped_active"], 0)
+
+    def test_stale_worker_of_cancelled_job_keeps_new_jobs_key(self):
+        old_id = self.enqueue("abcdefghij1")["job_ids"][0]
+        self.manager.cancel(old_id)
+        self.assertEqual(self.enqueue("abcdefghij1")["added"], 1)
+        # The cancelled job's worker finally runs; it must not free the new job's key.
+        self.manager._run(old_id, ("abcdefghij1", "mp4"))
+        self.assertEqual(self.manager.jobs.get(old_id)["state"], "cancelled")
+        self.assertEqual(self.enqueue("abcdefghij1")["skipped_active"], 1)
+
     def test_cancel_all_marks_queued_jobs(self):
         self.enqueue("abcdefghij1")
         self.enqueue("abcdefghij2")

@@ -66,9 +66,14 @@ export async function copyText(text) {
  * confirms; other actions close with their own value. Resolves with the action value
  * or null when dismissed.
  */
-export function openDialog({ title, message = "", body = null, actions = [], validate = null, onOpen = null, wide = false }) {
+export async function openDialog({ title, message = "", body = null, actions = [], validate = null, onOpen = null, wide = false }) {
     const dialog = $("#modal");
-    if (dialog.open) dialog.close();
+    if (dialog.open) {
+        // "close" fires asynchronously; wait so it cannot resolve the new dialog's promise.
+        const closed = new Promise((resolve) => dialog.addEventListener("close", resolve, { once: true }));
+        dialog.close();
+        await closed;
+    }
     return new Promise((resolve) => {
         const primary = actions.find((action) => action.primary) || null;
         dialog.style.width = wide ? "min(560px, calc(100vw - 32px))" : "";

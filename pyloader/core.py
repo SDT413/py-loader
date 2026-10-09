@@ -317,6 +317,7 @@ class MediaLibrary:
         self._lock = threading.RLock()
         self._records: dict[str, dict[str, Any]] = {}
         self._by_id: dict[str, str] = {}
+        self._by_video: dict[str, list[str]] = {}
         self.revision = 0
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self._load()
@@ -334,10 +335,13 @@ class MediaLibrary:
 
     def _reindex_ids(self) -> None:
         self._by_id = {}
+        self._by_video = {}
         for filename, record in self._records.items():
             if not record.get("id") or record["id"] in self._by_id:
                 record["id"] = new_media_id()
             self._by_id[record["id"]] = filename
+            if record.get("video_id"):
+                self._by_video.setdefault(record["video_id"], []).append(filename)
 
     def _save(self) -> None:
         self._reindex_ids()
@@ -458,11 +462,12 @@ class MediaLibrary:
         if not video_id:
             return []
         with self._lock:
-            return sorted({
-                str(record.get("format"))
-                for record in self._records.values()
-                if record.get("video_id") == video_id and (self.download_root / record["filename"]).is_file()
-            })
+            records = [self._records[name] for name in self._by_video.get(video_id, ()) if name in self._records]
+        return sorted({
+            str(record.get("format"))
+            for record in records
+            if (self.download_root / record["filename"]).is_file()
+        })
 
     def by_filename(self, filename: str) -> dict[str, Any] | None:
         key = Path(filename).as_posix()
@@ -483,11 +488,17 @@ class MediaLibrary:
         return candidate
 
     def remove(self, filename: str) -> dict[str, Any] | None:
-        key = Path(filename).as_posix()
+        return (self.remove_many([filename]) or [None])[0]
+
+    def remove_many(self, filenames: Iterable[str]) -> list[dict[str, Any]]:
         with self._lock:
-            record = self._records.pop(key, None)
+            removed = [self._records.pop(Path(name).as_posix(), None) for name in filenames]
             self._save()
-            return record
+            return [record for record in removed if record]
+
+    def thumbnails_in_use(self) -> set[str]:
+        with self._lock:
+            return {str(record["thumbnail"]) for record in self._records.values() if record.get("thumbnail")}
 
     def set_favorite(self, media_ids: Iterable[str], favorite: bool) -> int:
         changed = 0
@@ -782,7 +793,8 @@ class DownloadManager:
         self.jobs = JobStore()
         self.executor = ThreadPoolExecutor(max_workers=max(1, min(config.workers, 8)), thread_name_prefix="pyloader")
         self._active_lock = threading.RLock()
-        self._active_keys: set[tuple[str, str]] = set()
+        # Dedupe key -> id of the job that owns it while queued or running.
+        self._active_keys: dict[tuple[str, str], str] = {}
 
     def _job_key(self, item: dict[str, Any], output_format: str) -> tuple[str, str]:
         return (str(item.get("id") or item.get("url")), output_format)
@@ -819,12 +831,12 @@ class DownloadManager:
             if normalized_options["skip_duplicates"] and self.library.has(item.get("id"), output_format):
                 skipped_library += 1
                 continue
+            job_id = str(uuid.uuid4())
             with self._active_lock:
                 if key in self._active_keys:
                     skipped_active += 1
                     continue
-                self._active_keys.add(key)
-            job_id = str(uuid.uuid4())
+                self._active_keys[key] = job_id
             job = {
                 "id": job_id,
                 "batch": batch,
@@ -1057,8 +1069,28 @@ class DownloadManager:
                 message = clean_error(exc)
                 self.jobs.update(job_id, state="failed", status="Ошибка", error=message)
         finally:
-            with self._active_lock:
-                self._active_keys.discard(key)
+            self._release(key, job_id)
+
+    def _release(self, key: tuple[str, str], job_id: str) -> None:
+        with self._active_lock:
+            if self._active_keys.get(key) == job_id:
+                del self._active_keys[key]
+
+    def cancel(self, job_id: str) -> bool:
+        job = self.jobs.get(job_id)
+        if not self.jobs.cancel(job_id):
+            return False
+        if job and job.get("state") == "queued":
+            # A cancelled job waiting for a worker would otherwise block a retry
+            # of the same video until its turn in the executor comes up.
+            self._release(self._job_key(job["item"], job["format"]), job_id)
+        return True
+
+    def cancel_all(self) -> int:
+        ids = [job["id"] for job in self.jobs.snapshot() if job.get("state") not in TERMINAL_STATES]
+        for job_id in ids:
+            self.cancel(job_id)
+        return len(ids)
 
     def retry(self, job_id: str) -> dict[str, Any]:
         return self.retry_many([job_id])

@@ -26,8 +26,12 @@ function render() {
         }
         const select = $("#bridge-address");
         $("#bridge-address-field").classList.toggle("hidden", status.addresses.length < 2);
-        select.innerHTML = status.addresses.map((address) => `<option value="${escapeHtml(address)}">${escapeHtml(address)}</option>`).join("");
-        select.value = status.address;
+        const options = status.addresses.join("|");
+        if (select.dataset.options !== options) {
+            select.dataset.options = options;
+            select.innerHTML = status.addresses.map((address) => `<option value="${escapeHtml(address)}">${escapeHtml(address)}</option>`).join("");
+        }
+        if (document.activeElement !== select) select.value = status.address;
     }
     renderOutbox();
 }

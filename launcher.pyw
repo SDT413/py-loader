@@ -43,6 +43,8 @@ def console_python() -> str:
 
 def start_server() -> None:
     LOG.parent.mkdir(parents=True, exist_ok=True)
+    if LOG.exists() and LOG.stat().st_size > 2_000_000:
+        LOG.replace(LOG.with_suffix(".log.old"))
     log = open(LOG, "a", encoding="utf-8")  # noqa: SIM115 - handed to the child process
     log.write(f"\n=== PyLoader launcher {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
     log.flush()

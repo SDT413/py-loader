@@ -92,11 +92,11 @@ function bindGlobalKeys() {
             event.preventDefault();
             if (currentView !== "library") location.hash = "#/library";
             window.setTimeout(library.focusSearch, 30);
-        } else if (event.key === " " && !event.target.closest?.("button, a, [role='menuitem']")) {
+        } else if (event.key === " " && !event.target.closest?.("button, a, input, select, summary, label, [role='menuitem']")) {
             event.preventDefault();
             player.toggle();
         } else if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
-            if (event.target.closest?.("input[type='range']")) return;
+            if (!player.current() || event.target.closest?.("input, select, [role='tablist']")) return;
             const forward = event.key === "ArrowRight";
             if (event.shiftKey) { if (forward) player.next(); else player.prev(); }
             else player.seekBy(forward ? 5 : -5);

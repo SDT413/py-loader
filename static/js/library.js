@@ -225,10 +225,11 @@ export function init() {
         if (event.key === "Delete" && state.selected.size) bulk("delete");
     });
 
+    const refreshSoon = debounce(() => { if (state.active) { refresh(); loadCollections(); } }, 700);
     on("library:revision", (revision) => {
         if (revision === state.revision) return;
         state.stale = true;
-        if (state.active) { refresh(); loadCollections(); }
+        refreshSoon();
     });
     on("stats", () => { if (state.active) renderLead(); });
     on("media:updated", ({ ids, changes }) => {

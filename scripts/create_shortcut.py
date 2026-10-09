@@ -30,6 +30,7 @@ def ps_quote(value: object) -> str:
 def create_windows(start_menu: bool) -> list[str]:
     # WScript.Shell resolves the real Desktop folder, including OneDrive-redirected ones.
     script = f"""
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $shell = New-Object -ComObject WScript.Shell
 $targets = @([Environment]::GetFolderPath('Desktop'))
 if (${'true' if start_menu else 'false'}) {{ $targets += [Environment]::GetFolderPath('Programs') }}
@@ -46,7 +47,7 @@ foreach ($folder in $targets) {{
 """
     result = subprocess.run(
         ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
-        capture_output=True, text=True, check=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", check=True,
     )
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 

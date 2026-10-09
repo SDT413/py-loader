@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
@@ -13,6 +14,10 @@ if __name__ == "__main__":
     download_root = Path(app.config["DOWNLOAD_ROOT"])
     manager = app.extensions["pyloader_manager"]
     bridge = app.extensions["pyloader_bridge"]
+    debug = os.environ.get("PYLOADER_DEBUG") == "1"
+    if not debug:
+        # The UI polls the queue every second; per-request lines would flood the console and log.
+        logging.getLogger("werkzeug").setLevel(logging.WARNING)
     bridge.autostart()
     port = int(os.environ.get("PYLOADER_PORT", "5000"))
     print("=" * 58)
@@ -27,7 +32,7 @@ if __name__ == "__main__":
     app.run(
         host="127.0.0.1",
         port=port,
-        debug=os.environ.get("PYLOADER_DEBUG") == "1",
+        debug=debug,
         use_reloader=False,
         threaded=True,
     )

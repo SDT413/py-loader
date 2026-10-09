@@ -493,6 +493,12 @@ export function init() {
         for (const item of state.queue) if (set.has(item.id)) Object.assign(item, changes);
         renderTrack();
     });
+    on("media:deleting", ({ ids }) => {
+        if (!current() || !ids.includes(current().id)) return;
+        state.element.pause();
+        state.element.removeAttribute("src");
+        state.element.load();
+    });
     on("media:deleted", ({ ids }) => {
         const set = new Set(ids);
         for (let index = state.queue.length - 1; index >= 0; index -= 1) {

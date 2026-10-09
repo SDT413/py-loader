@@ -27,10 +27,16 @@ export async function deleteMedia(ids, title = "") {
     });
     if (!ok) return false;
     try {
+        // Stop streaming a file before deleting it: Windows keeps open files locked.
+        emit("media:deleting", { ids });
         const data = await api("/api/library", { method: "DELETE", body: { ids } });
-        emit("media:deleted", { ids });
+        emit("media:deleted", { ids: data.deleted_ids });
         emit("playlists:changed");
-        toast(many ? `Удалено файлов: ${data.deleted}` : "Файл удалён");
+        if (data.failed?.length) {
+            toast(`Удалено ${data.deleted}, не удалось: ${data.failed.length} — файлы заняты другой программой`, "warning", 8000);
+        } else {
+            toast(many ? `Удалено файлов: ${data.deleted}` : "Файл удалён");
+        }
         return true;
     } catch (error) {
         toast(error.message, "error");
