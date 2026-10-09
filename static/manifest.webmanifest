@@ -1,0 +1,16 @@
+{
+    "name": "PyLoader",
+    "short_name": "PyLoader",
+    "description": "Скачивание видео и музыки, медиатека и плеер",
+    "start_url": "/#/download",
+    "scope": "/",
+    "display": "standalone",
+    "background_color": "#090c12",
+    "theme_color": "#090c12",
+    "lang": "ru",
+    "icons": [
+        { "src": "/static/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+        { "src": "/static/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+        { "src": "/static/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+    ]
+}

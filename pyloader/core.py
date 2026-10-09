@@ -25,6 +25,9 @@ SUPPORTED_FORMATS = {"mp3", "m4a", "opus", "mp4", "mkv"}
 AUDIO_FORMATS = {"mp3", "m4a", "opus"}
 VIDEO_FORMATS = {"mp4", "mkv"}
 TERMINAL_STATES = {"completed", "skipped", "failed", "cancelled"}
+ACTIVE_STATES = {"extracting", "downloading", "processing"}
+LIBRARY_SORTS = {"date", "name", "size", "duration", "artist", "playlist"}
+THUMBNAIL_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
 BROWSER_NAMES = {"none", "chrome", "edge", "firefox", "brave", "opera", "vivaldi"}
 YOUTUBE_ID_RE = re.compile(r"(?:v=|youtu\.be/)([A-Za-z0-9_-]{11})")
 INVALID_FILENAME_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
@@ -78,6 +81,10 @@ def safe_component(value: str, fallback: str = "media", max_length: int = 180) -
     return cleaned[:max_length].rstrip(". ") or fallback
 
 
+def glob_escape(value: str) -> str:
+    return re.sub(r"([*?\[])", r"[\1]", value)
+
+
 def extract_video_id_from_values(values: Iterable[Any]) -> str | None:
     for value in values:
         match = YOUTUBE_ID_RE.search(str(value))
@@ -86,30 +93,65 @@ def extract_video_id_from_values(values: Iterable[Any]) -> str | None:
     return None
 
 
-def media_tags(path: Path) -> tuple[str | None, str | None]:
+def write_json_atomic(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_suffix(path.suffix + ".tmp")
+    temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(temp, path)
+
+
+def read_json(path: Path, default: Any) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return default
+
+
+def new_media_id() -> str:
+    return uuid.uuid4().hex[:12]
+
+
+def _tag_text(value: Any) -> str | None:
+    if hasattr(value, "text") and value.text:
+        return str(value.text[0])
+    if isinstance(value, (list, tuple)):
+        return str(value[0]) if value else None
+    return str(value) if value is not None else None
+
+
+def media_details(path: Path) -> dict[str, Any]:
+    """Read the embedded YouTube ID, title, artist and duration of a media file."""
+    details: dict[str, Any] = {"video_id": None, "title": None, "artist": None, "duration": None}
     try:
         media = MutagenFile(path, easy=False)
-        if not media or not media.tags:
-            return None, None
+        if not media:
+            return details
+        length = getattr(getattr(media, "info", None), "length", None)
+        if isinstance(length, (int, float)) and length > 0:
+            details["duration"] = round(float(length), 1)
+        if not media.tags:
+            return details
         preferred_values: list[Any] = []
         fallback_values: list[Any] = []
-        title = None
         for key, value in media.tags.items():
             key_text = str(key).lower()
             fallback_values.append(value)
             if any(marker in key_text for marker in ("purl", "comment", "website", "url")):
                 preferred_values.append(value)
-            if title is None and (key_text in {"tit2", "\xa9nam"} or "title" in key_text):
-                if hasattr(value, "text") and value.text:
-                    title = str(value.text[0])
-                elif isinstance(value, (list, tuple)) and value:
-                    title = str(value[0])
-                else:
-                    title = str(value)
+            if details["title"] is None and (key_text in {"tit2", "\xa9nam"} or "title" in key_text):
+                details["title"] = _tag_text(value)
+            if details["artist"] is None and key_text in {"tpe1", "\xa9art", "artist"}:
+                details["artist"] = _tag_text(value)
         video_id = extract_video_id_from_values(preferred_values)
-        return video_id or extract_video_id_from_values(fallback_values), title
+        details["video_id"] = video_id or extract_video_id_from_values(fallback_values)
     except Exception:
-        return None, None
+        pass
+    return details
+
+
+def media_tags(path: Path) -> tuple[str | None, str | None]:
+    details = media_details(path)
+    return details["video_id"], details["title"]
 
 
 def ydl_base_options(cookies_browser: str = "none", proxy: str = "") -> dict[str, Any]:
@@ -274,29 +316,38 @@ class MediaLibrary:
         self.state_file = self.state_dir / "library.json"
         self._lock = threading.RLock()
         self._records: dict[str, dict[str, Any]] = {}
+        self._by_id: dict[str, str] = {}
+        self._by_video: dict[str, list[str]] = {}
+        self.revision = 0
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self._load()
         self.sync()
 
     def _load(self) -> None:
-        if not self.state_file.exists():
+        data = read_json(self.state_file, {})
+        if not isinstance(data, dict):
             return
-        try:
-            data = json.loads(self.state_file.read_text(encoding="utf-8"))
-            self._records = {
-                item["filename"]: item
-                for item in data.get("items", [])
-                if isinstance(item, dict) and item.get("filename")
-            }
-        except (OSError, ValueError, TypeError):
-            self._records = {}
+        self._records = {
+            item["filename"]: item
+            for item in data.get("items", [])
+            if isinstance(item, dict) and item.get("filename")
+        }
+
+    def _reindex_ids(self) -> None:
+        self._by_id = {}
+        self._by_video = {}
+        for filename, record in self._records.items():
+            if not record.get("id") or record["id"] in self._by_id:
+                record["id"] = new_media_id()
+            self._by_id[record["id"]] = filename
+            if record.get("video_id"):
+                self._by_video.setdefault(record["video_id"], []).append(filename)
 
     def _save(self) -> None:
-        self.state_dir.mkdir(parents=True, exist_ok=True)
-        payload = {"version": 2, "updated_at": utc_now(), "items": list(self._records.values())}
-        temp = self.state_file.with_suffix(".tmp")
-        temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(temp, self.state_file)
+        self._reindex_ids()
+        self.revision += 1
+        payload = {"version": 3, "updated_at": utc_now(), "items": list(self._records.values())}
+        write_json_atomic(self.state_file, payload)
 
     def _media_files(self) -> list[Path]:
         files: list[Path] = []
@@ -310,48 +361,82 @@ class MediaLibrary:
     def _thumbnail_for(self, path: Path, video_id: str | None) -> str | None:
         candidates: list[Path] = []
         if video_id:
-            candidates.extend(self.thumbnails_root.glob(f"{video_id}.*"))
-        candidates.extend(self.thumbnails_root.glob(f"{path.stem}.*"))
+            candidates.extend(self.thumbnails_root.glob(f"{glob_escape(video_id)}.*"))
+        candidates.extend(self.thumbnails_root.glob(f"{glob_escape(path.stem)}.*"))
         for candidate in candidates:
-            if candidate.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}:
+            if candidate.suffix.lower() in THUMBNAIL_SUFFIXES:
                 return candidate.relative_to(self.thumbnails_root).as_posix()
         return None
 
     def sync(self) -> dict[str, int]:
         with self._lock:
+            paths = {path.relative_to(self.download_root).as_posix(): path for path in self._media_files()}
+            # Files that were moved or renamed outside PyLoader keep their id, favorite
+            # flag and playlist membership when the YouTube ID and format still match.
+            orphans = {
+                (record.get("video_id"), record.get("format")): record
+                for filename, record in self._records.items()
+                if filename not in paths and record.get("video_id")
+            }
             current: dict[str, dict[str, Any]] = {}
-            for path in self._media_files():
-                relative = path.relative_to(self.download_root).as_posix()
+            for relative, path in paths.items():
                 stat = path.stat()
-                previous = self._records.get(relative, {})
-                found_id, found_title = media_tags(path)
-                video_id = found_id or previous.get("video_id")
-                tag_title = found_title or previous.get("title")
+                previous = self._records.get(relative)
                 output_format = path.suffix.lower().lstrip(".")
+                unchanged = (
+                    previous is not None
+                    and previous.get("scanned")
+                    and previous.get("size") == stat.st_size
+                    and previous.get("modified") == stat.st_mtime
+                )
+                if unchanged:
+                    if not previous.get("thumbnail"):
+                        previous["thumbnail"] = self._thumbnail_for(path, previous.get("video_id"))
+                    current[relative] = previous
+                    continue
+                details = media_details(path)
+                if previous is None:
+                    previous = orphans.pop((details["video_id"], output_format), None) or {}
+                video_id = details["video_id"] or previous.get("video_id")
                 current[relative] = {
                     **previous,
+                    "id": previous.get("id") or new_media_id(),
                     "filename": relative,
-                    "title": tag_title or path.stem,
+                    "title": details["title"] or previous.get("title") or path.stem,
+                    "artist": details["artist"] or previous.get("artist"),
                     "video_id": video_id,
                     "format": output_format,
                     "media_type": "audio" if output_format in AUDIO_FORMATS else "video",
                     "size": stat.st_size,
                     "modified": stat.st_mtime,
+                    "duration": details["duration"] or previous.get("duration"),
                     "thumbnail": previous.get("thumbnail") or self._thumbnail_for(path, video_id),
+                    "added_at": previous.get("added_at") or utc_now(),
+                    "scanned": True,
                 }
             self._records = current
             self._save()
             return {"indexed": len(current)}
 
-    def register(self, path: Path, info: dict[str, Any], options: dict[str, Any], thumbnail: str | None) -> None:
+    def register(
+        self, path: Path, info: dict[str, Any], options: dict[str, Any], thumbnail: str | None
+    ) -> dict[str, Any]:
         resolved = path.resolve()
         if self.download_root not in resolved.parents:
             raise ValueError("Файл находится вне папки загрузок")
         relative = resolved.relative_to(self.download_root).as_posix()
+        stat = resolved.stat()
+        details = media_details(resolved)
         with self._lock:
+            previous = self._records.get(relative) or {}
             self._records[relative] = {
+                "id": previous.get("id") or new_media_id(),
                 "filename": relative,
-                "title": info.get("title") or path.stem,
+                "title": info.get("title") or details["title"] or path.stem,
+                "artist": (
+                    info.get("artist") or info.get("creator") or info.get("uploader")
+                    or info.get("channel") or details["artist"]
+                ),
                 "video_id": info.get("id"),
                 "source_url": info.get("webpage_url") or info.get("original_url"),
                 "format": options["format"],
@@ -359,22 +444,30 @@ class MediaLibrary:
                 "quality": options.get("quality"),
                 "playlist_title": options.get("playlist_title"),
                 "playlist_index": options.get("playlist_index"),
-                "size": resolved.stat().st_size,
-                "modified": resolved.stat().st_mtime,
+                "size": stat.st_size,
+                "modified": stat.st_mtime,
+                "duration": info.get("duration") or details["duration"],
                 "thumbnail": thumbnail,
                 "added_at": utc_now(),
+                "favorite": bool(previous.get("favorite")),
+                "scanned": True,
             }
             self._save()
+            return copy.deepcopy(self._records[relative])
 
     def has(self, video_id: str | None, output_format: str) -> bool:
+        return output_format in self.formats_for(video_id)
+
+    def formats_for(self, video_id: str | None) -> list[str]:
         if not video_id:
-            return False
+            return []
         with self._lock:
-            for record in self._records.values():
-                if record.get("video_id") == video_id and record.get("format") == output_format:
-                    if (self.download_root / record["filename"]).is_file():
-                        return True
-        return False
+            records = [self._records[name] for name in self._by_video.get(video_id, ()) if name in self._records]
+        return sorted({
+            str(record.get("format"))
+            for record in records
+            if (self.download_root / record["filename"]).is_file()
+        })
 
     def by_filename(self, filename: str) -> dict[str, Any] | None:
         key = Path(filename).as_posix()
@@ -382,12 +475,42 @@ class MediaLibrary:
             record = self._records.get(key)
             return copy.deepcopy(record) if record else None
 
-    def remove(self, filename: str) -> dict[str, Any] | None:
-        key = Path(filename).as_posix()
+    def by_id(self, media_id: str) -> dict[str, Any] | None:
         with self._lock:
-            record = self._records.pop(key, None)
+            filename = self._by_id.get(str(media_id))
+            record = self._records.get(filename) if filename else None
+            return copy.deepcopy(record) if record else None
+
+    def path_of(self, record: dict[str, Any]) -> Path:
+        candidate = (self.download_root / record["filename"]).resolve()
+        if self.download_root not in candidate.parents:
+            raise ValueError("Недопустимый путь")
+        return candidate
+
+    def remove(self, filename: str) -> dict[str, Any] | None:
+        return (self.remove_many([filename]) or [None])[0]
+
+    def remove_many(self, filenames: Iterable[str]) -> list[dict[str, Any]]:
+        with self._lock:
+            removed = [self._records.pop(Path(name).as_posix(), None) for name in filenames]
             self._save()
-            return record
+            return [record for record in removed if record]
+
+    def thumbnails_in_use(self) -> set[str]:
+        with self._lock:
+            return {str(record["thumbnail"]) for record in self._records.values() if record.get("thumbnail")}
+
+    def set_favorite(self, media_ids: Iterable[str], favorite: bool) -> int:
+        changed = 0
+        with self._lock:
+            for media_id in media_ids:
+                filename = self._by_id.get(str(media_id))
+                if filename and filename in self._records:
+                    self._records[filename]["favorite"] = bool(favorite)
+                    changed += 1
+            if changed:
+                self._save()
+        return changed
 
     def associate(self, filename: str, video_id: str, title: str | None = None) -> None:
         """Attach a YouTube ID to a legacy file whose embedded metadata is incomplete."""
@@ -401,25 +524,85 @@ class MediaLibrary:
                 self._records[key]["title"] = title
             self._save()
 
-    def list(self, media_filter: str = "all", search: str = "", sort: str = "date") -> list[dict[str, Any]]:
+    @staticmethod
+    def public(record: dict[str, Any]) -> dict[str, Any]:
+        public = copy.deepcopy(record)
+        public.pop("scanned", None)
+        public["favorite"] = bool(public.get("favorite"))
+        public["size_text"] = format_bytes(public.get("size"))
+        return public
+
+    def list(
+        self,
+        media_filter: str = "all",
+        search: str = "",
+        sort: str = "date",
+        collection: str | None = None,
+    ) -> list[dict[str, Any]]:
         search_folded = search.casefold().strip()
         with self._lock:
             rows = []
             for record in self._records.values():
-                if media_filter != "all" and record.get("media_type") != media_filter and record.get("format") != media_filter:
+                if media_filter == "favorites":
+                    if not record.get("favorite"):
+                        continue
+                elif media_filter != "all" and record.get("media_type") != media_filter and record.get("format") != media_filter:
                     continue
-                haystack = " ".join(str(record.get(key) or "") for key in ("title", "filename", "playlist_title"))
+                if collection is not None and (record.get("playlist_title") or "") != collection:
+                    continue
+                haystack = " ".join(
+                    str(record.get(key) or "") for key in ("title", "artist", "filename", "playlist_title")
+                )
                 if search_folded and search_folded not in haystack.casefold():
                     continue
-                public = copy.deepcopy(record)
-                public["size_text"] = format_bytes(public.get("size"))
-                rows.append(public)
+                rows.append(self.public(record))
         if sort == "name":
             rows.sort(key=lambda row: str(row.get("title") or "").casefold())
+        elif sort == "artist":
+            rows.sort(key=lambda row: (str(row.get("artist") or "￿").casefold(), str(row.get("title") or "").casefold()))
         elif sort == "size":
             rows.sort(key=lambda row: row.get("size") or 0, reverse=True)
+        elif sort == "duration":
+            rows.sort(key=lambda row: row.get("duration") or 0, reverse=True)
+        elif sort == "playlist":
+            rows.sort(key=lambda row: (row.get("playlist_index") or 10**9, str(row.get("title") or "").casefold()))
         else:
             rows.sort(key=lambda row: row.get("modified") or 0, reverse=True)
+        return rows
+
+    def resolve(self, media_ids: Iterable[str]) -> list[dict[str, Any]]:
+        """Return public records for ids in the given order, silently dropping unknown ids."""
+        with self._lock:
+            rows = []
+            for media_id in media_ids:
+                filename = self._by_id.get(str(media_id))
+                record = self._records.get(filename) if filename else None
+                if record:
+                    rows.append(self.public(record))
+            return rows
+
+    def collections(self) -> list[dict[str, Any]]:
+        """Group files by the YouTube playlist they were downloaded from."""
+        groups: dict[str, dict[str, Any]] = {}
+        with self._lock:
+            for record in self._records.values():
+                name = record.get("playlist_title")
+                if not name:
+                    continue
+                group = groups.setdefault(name, {
+                    "name": name, "count": 0, "audio_count": 0, "video_count": 0,
+                    "duration": 0.0, "size": 0, "thumbnails": [], "modified": 0,
+                })
+                group["count"] += 1
+                group["audio_count" if record.get("media_type") == "audio" else "video_count"] += 1
+                group["duration"] += float(record.get("duration") or 0)
+                group["size"] += int(record.get("size") or 0)
+                group["modified"] = max(group["modified"], record.get("modified") or 0)
+                if record.get("thumbnail") and len(group["thumbnails"]) < 4:
+                    group["thumbnails"].append(record["thumbnail"])
+        rows = sorted(groups.values(), key=lambda group: group["modified"], reverse=True)
+        for row in rows:
+            row["size_text"] = format_bytes(row["size"])
         return rows
 
     def stats(self) -> dict[str, Any]:
@@ -430,20 +613,51 @@ class MediaLibrary:
             "total_count": len(rows),
             "audio_count": sum(row.get("media_type") == "audio" for row in rows),
             "video_count": sum(row.get("media_type") == "video" for row in rows),
+            "favorite_count": sum(bool(row.get("favorite")) for row in rows),
             "total_size": total_size,
             "total_size_text": format_bytes(total_size),
+            "total_duration": round(sum(float(row.get("duration") or 0) for row in rows)),
+            "revision": self.revision,
         }
 
 
+PUBLIC_JOB_FIELDS = (
+    "id", "batch", "seq", "url", "video_id", "title", "format", "state", "status", "progress",
+    "speed_text", "eta", "downloaded_bytes", "total_bytes", "filename", "media_id", "error",
+    "created_at", "updated_at",
+)
+
+
 class JobStore:
+    """Thread-safe job registry with cheap incremental snapshots for polling clients."""
+
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._jobs: dict[str, dict[str, Any]] = {}
         self._cancelled: set[str] = set()
+        self._version = 0
+        self._seq = 0
+        self._batch = 0
+        # Changes whenever jobs disappear, so clients know a delta is not enough.
+        self._epoch = uuid.uuid4().hex[:8]
+
+    def _touch(self, job: dict[str, Any]) -> None:
+        self._version += 1
+        job["_v"] = self._version
+        job["updated_at"] = utc_now()
+
+    def next_batch(self) -> int:
+        with self._lock:
+            self._batch += 1
+            return self._batch
 
     def add(self, job: dict[str, Any]) -> None:
         with self._lock:
+            self._seq += 1
+            job.setdefault("seq", self._seq)
+            job.setdefault("batch", self._batch)
             self._jobs[job["id"]] = job
+            self._touch(job)
 
     def get(self, job_id: str) -> dict[str, Any] | None:
         with self._lock:
@@ -455,26 +669,87 @@ class JobStore:
             if job_id not in self._jobs:
                 return
             self._jobs[job_id].update(changes)
-            self._jobs[job_id]["updated_at"] = utc_now()
+            self._touch(self._jobs[job_id])
 
     def snapshot(self) -> list[dict[str, Any]]:
         with self._lock:
             jobs = copy.deepcopy(list(self._jobs.values()))
-        jobs.sort(key=lambda job: job.get("created_at", ""), reverse=True)
+        jobs.sort(key=lambda job: (-int(job.get("batch") or 0), int(job.get("seq") or 0)))
         return jobs
+
+    @staticmethod
+    def public(job: dict[str, Any]) -> dict[str, Any]:
+        view = {field: job.get(field) for field in PUBLIC_JOB_FIELDS}
+        item = job.get("item") or {}
+        view["thumbnail"] = item.get("thumbnail")
+        view["playlist_title"] = item.get("playlist_title")
+        return view
+
+    def changes(self, since: int = 0, epoch: str | None = None) -> dict[str, Any]:
+        with self._lock:
+            full = since <= 0 or epoch != self._epoch
+            jobs = [
+                self.public(job) for job in self._jobs.values()
+                if full or int(job.get("_v") or 0) > since
+            ]
+            return {
+                "epoch": self._epoch,
+                "version": self._version,
+                "full": full,
+                "jobs": jobs,
+                "summary": self.summary(),
+            }
+
+    def summary(self) -> dict[str, int]:
+        with self._lock:
+            states = [job.get("state") for job in self._jobs.values()]
+        return {
+            "total": len(states),
+            "queued": states.count("queued"),
+            "running": sum(state in ACTIVE_STATES for state in states),
+            "active": sum(state not in TERMINAL_STATES for state in states),
+            "completed": states.count("completed"),
+            "skipped": states.count("skipped"),
+            "failed": states.count("failed"),
+            "cancelled": states.count("cancelled"),
+        }
 
     def cancel(self, job_id: str) -> bool:
         with self._lock:
             if job_id not in self._jobs:
                 return False
+            if self._jobs[job_id].get("state") in TERMINAL_STATES:
+                return True
             self._cancelled.add(job_id)
             if self._jobs[job_id].get("state") == "queued":
                 self._jobs[job_id].update(state="cancelled", status="Отменено")
+                self._touch(self._jobs[job_id])
             return True
+
+    def cancel_all(self) -> int:
+        with self._lock:
+            ids = [job_id for job_id, job in self._jobs.items() if job.get("state") not in TERMINAL_STATES]
+        for job_id in ids:
+            self.cancel(job_id)
+        return len(ids)
 
     def is_cancelled(self, job_id: str) -> bool:
         with self._lock:
             return job_id in self._cancelled
+
+    def remove(self, job_id: str) -> bool:
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if not job or job.get("state") not in TERMINAL_STATES:
+                return False
+            self._jobs.pop(job_id)
+            self._cancelled.discard(job_id)
+            self._epoch = uuid.uuid4().hex[:8]
+            return True
+
+    def ids_in_state(self, state: str) -> list[str]:
+        with self._lock:
+            return [job_id for job_id, job in self._jobs.items() if job.get("state") == state]
 
     def clear_terminal(self) -> int:
         with self._lock:
@@ -482,7 +757,25 @@ class JobStore:
             for job_id in ids:
                 self._jobs.pop(job_id, None)
                 self._cancelled.discard(job_id)
+            if ids:
+                self._epoch = uuid.uuid4().hex[:8]
             return len(ids)
+
+
+def stream_phase(info: dict[str, Any], output_format: str) -> tuple[str, float, float]:
+    """Map one stream of a merged download onto the overall progress bar.
+
+    yt-dlp downloads video and audio of a merged format one after another and
+    reports progress for each separately; video is usually ~90% of the bytes.
+    """
+    vcodec = str(info.get("vcodec") or "")
+    acodec = str(info.get("acodec") or "")
+    if output_format in VIDEO_FORMATS:
+        if vcodec and vcodec != "none" and acodec == "none":
+            return "видео", 0.0, 0.9
+        if vcodec == "none" and acodec and acodec != "none":
+            return "аудио", 0.9, 0.1
+    return "", 0.0, 1.0
 
 
 @dataclass
@@ -500,7 +793,8 @@ class DownloadManager:
         self.jobs = JobStore()
         self.executor = ThreadPoolExecutor(max_workers=max(1, min(config.workers, 8)), thread_name_prefix="pyloader")
         self._active_lock = threading.RLock()
-        self._active_keys: set[tuple[str, str]] = set()
+        # Dedupe key -> id of the job that owns it while queued or running.
+        self._active_keys: dict[tuple[str, str], str] = {}
 
     def _job_key(self, item: dict[str, Any], output_format: str) -> tuple[str, str]:
         return (str(item.get("id") or item.get("url")), output_format)
@@ -525,6 +819,7 @@ class DownloadManager:
         added = skipped_active = skipped_library = skipped_batch = 0
         job_ids: list[str] = []
         seen: set[tuple[str, str]] = set()
+        batch = self.jobs.next_batch()
         for raw_item in items:
             item = copy.deepcopy(raw_item)
             item["url"] = ensure_http_url(str(item.get("url") or ""))
@@ -536,14 +831,15 @@ class DownloadManager:
             if normalized_options["skip_duplicates"] and self.library.has(item.get("id"), output_format):
                 skipped_library += 1
                 continue
+            job_id = str(uuid.uuid4())
             with self._active_lock:
                 if key in self._active_keys:
                     skipped_active += 1
                     continue
-                self._active_keys.add(key)
-            job_id = str(uuid.uuid4())
+                self._active_keys[key] = job_id
             job = {
                 "id": job_id,
+                "batch": batch,
                 "item": item,
                 "options": normalized_options,
                 "url": item["url"],
@@ -559,6 +855,7 @@ class DownloadManager:
                 "downloaded_bytes": 0,
                 "total_bytes": 0,
                 "filename": None,
+                "media_id": None,
                 "error": None,
                 "created_at": utc_now(),
                 "updated_at": utc_now(),
@@ -582,13 +879,16 @@ class DownloadManager:
         if status == "downloading":
             downloaded = int(data.get("downloaded_bytes") or 0)
             total = int(data.get("total_bytes") or data.get("total_bytes_estimate") or 0)
-            progress = (downloaded / total * 100) if total else 0.0
+            job = self.jobs.get(job_id) or {}
+            phase, start, weight = stream_phase(data.get("info_dict") or {}, str(job.get("format") or ""))
+            fraction = min(downloaded / total, 1.0) if total else 0.0
+            progress = (start + fraction * weight) * 100
             speed = data.get("speed")
             self.jobs.update(
                 job_id,
                 state="downloading",
-                status="Скачивание",
-                progress=round(min(progress, 99.5), 1),
+                status=f"Скачивание · {phase}" if phase else "Скачивание",
+                progress=round(min(max(progress, float(job.get("progress") or 0)), 99.5), 1),
                 speed=speed,
                 speed_text=f"{format_bytes(speed)}/с" if speed else "",
                 eta=data.get("eta"),
@@ -596,7 +896,12 @@ class DownloadManager:
                 total_bytes=total,
             )
         elif status == "finished":
-            self.jobs.update(job_id, state="processing", status="Обработка", progress=99.5)
+            job = self.jobs.get(job_id) or {}
+            phase, start, weight = stream_phase(data.get("info_dict") or {}, str(job.get("format") or ""))
+            if phase == "видео":
+                self.jobs.update(job_id, progress=round((start + weight) * 100, 1))
+            else:
+                self.jobs.update(job_id, state="processing", status="Обработка", progress=99.5)
 
     def _postprocessor_hook(self, job_id: str, data: dict[str, Any]) -> None:
         if self.jobs.is_cancelled(job_id):
@@ -726,7 +1031,7 @@ class DownloadManager:
 
             if not expected.exists():
                 candidates = [
-                    path for path in folder.glob(f"{stem}.*")
+                    path for path in folder.glob(f"{glob_escape(stem)}.*")
                     if path.suffix.lower().lstrip(".") == output_format and ".temp." not in path.name.lower()
                 ]
                 if candidates:
@@ -735,21 +1040,22 @@ class DownloadManager:
                 raise RuntimeError("Файл не появился после обработки FFmpeg")
 
             thumbnail = None
-            for candidate in self.config.thumbnails_root.glob(f"{video_id or job_id}.*"):
-                if candidate.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}:
+            for candidate in self.config.thumbnails_root.glob(f"{glob_escape(video_id or job_id)}.*"):
+                if candidate.suffix.lower() in THUMBNAIL_SUFFIXES:
                     thumbnail = candidate.relative_to(self.config.thumbnails_root).as_posix()
                     break
             register_options = {**options, **{
                 "playlist_title": item.get("playlist_title"),
                 "playlist_index": item.get("playlist_index"),
             }}
-            self.library.register(expected, result or info, register_options, thumbnail)
+            record = self.library.register(expected, result or info, register_options, thumbnail)
             self.jobs.update(
                 job_id,
                 state="completed",
                 status="Готово",
                 progress=100.0,
-                filename=expected.relative_to(self.config.download_root).as_posix(),
+                filename=record["filename"],
+                media_id=record["id"],
                 speed=None,
                 speed_text="",
                 eta=0,
@@ -763,17 +1069,58 @@ class DownloadManager:
                 message = clean_error(exc)
                 self.jobs.update(job_id, state="failed", status="Ошибка", error=message)
         finally:
-            with self._active_lock:
-                self._active_keys.discard(key)
+            self._release(key, job_id)
+
+    def _release(self, key: tuple[str, str], job_id: str) -> None:
+        with self._active_lock:
+            if self._active_keys.get(key) == job_id:
+                del self._active_keys[key]
+
+    def cancel(self, job_id: str) -> bool:
+        job = self.jobs.get(job_id)
+        if not self.jobs.cancel(job_id):
+            return False
+        if job and job.get("state") == "queued":
+            # A cancelled job waiting for a worker would otherwise block a retry
+            # of the same video until its turn in the executor comes up.
+            self._release(self._job_key(job["item"], job["format"]), job_id)
+        return True
+
+    def cancel_all(self) -> int:
+        ids = [job["id"] for job in self.jobs.snapshot() if job.get("state") not in TERMINAL_STATES]
+        for job_id in ids:
+            self.cancel(job_id)
+        return len(ids)
 
     def retry(self, job_id: str) -> dict[str, Any]:
-        job = self.jobs.get(job_id)
-        if not job:
+        return self.retry_many([job_id])
+
+    def retry_many(self, job_ids: Iterable[str]) -> dict[str, Any]:
+        jobs = [job for job in (self.jobs.get(job_id) for job_id in job_ids) if job]
+        if not jobs:
             raise KeyError("Задача не найдена")
-        return self.enqueue([job["item"]], job["options"])
+        totals = {"added": 0, "skipped_active": 0, "skipped_library": 0, "skipped_batch": 0, "job_ids": []}
+        # Jobs with identical options are re-queued together so they share one batch.
+        groups: dict[str, list[dict[str, Any]]] = {}
+        for job in jobs:
+            groups.setdefault(json.dumps(job["options"], sort_keys=True), []).append(job)
+        for group in groups.values():
+            result = self.enqueue([job["item"] for job in group], group[0]["options"])
+            for key, value in result.items():
+                totals[key] += value
+            for job in group:
+                # The new attempt replaces the old card instead of duplicating it.
+                self.jobs.remove(job["id"])
+        return totals
+
+    def retry_failed(self) -> dict[str, Any]:
+        failed = self.jobs.ids_in_state("failed")
+        if not failed:
+            return {"added": 0, "skipped_active": 0, "skipped_library": 0, "skipped_batch": 0, "job_ids": []}
+        return self.retry_many(failed)
 
     def active_count(self) -> int:
-        return sum(job.get("state") not in TERMINAL_STATES for job in self.jobs.snapshot())
+        return self.jobs.summary()["active"]
 
 
 def find_ffmpeg(base_dir: Path) -> Path | None:

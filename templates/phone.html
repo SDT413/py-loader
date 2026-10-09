@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="color-scheme" content="dark light">
+    <meta name="theme-color" content="#090c12">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <title>PyLoader</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%2335d987'/%3E%3Cpath d='M16 7v13m0 0 5-5m-5 5-5-5M9 23.5v1.5h14v-1.5' fill='none' stroke='%2306130c' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+    <link rel="stylesheet" href="{{ url_for('static', filename='phone.css') }}">
+</head>
+<body class="{{ 'paired' if paired else 'unpaired' }}">
+{% include "_icons.html" %}
+{% if paired %}
+<header class="top">
+    <div class="brand"><span class="mark"><svg><use href="#i-logo"/></svg></span><strong>PyLoader</strong></div>
+    <label class="search"><svg><use href="#i-search"/></svg><input id="search" placeholder="Поиск" aria-label="Поиск"></label>
+</header>
+<nav class="tabs" id="tabs">
+    <button class="tab active" data-tab="outbox" type="button">Отправленное</button>
+    <button class="tab" data-tab="audio" type="button">Музыка</button>
+    <button class="tab" data-tab="video" type="button">Видео</button>
+    <button class="tab" data-tab="playlists" type="button">Плейлисты</button>
+</nav>
+<main id="content" aria-live="polite"></main>
+<footer class="mini" id="mini" hidden>
+    <div class="mini-progress"><div id="mini-fill"></div></div>
+    <img id="mini-cover" alt="">
+    <div class="mini-meta"><strong id="mini-title"></strong><span id="mini-artist"></span></div>
+    <button id="mini-prev" type="button" aria-label="Предыдущий"><svg><use href="#i-prev"/></svg></button>
+    <button id="mini-toggle" class="play" type="button" aria-label="Воспроизвести"><svg><use href="#i-play"/></svg></button>
+    <button id="mini-next" type="button" aria-label="Следующий"><svg><use href="#i-next"/></svg></button>
+</footer>
+<audio id="audio" preload="metadata"></audio>
+<script src="{{ url_for('static', filename='phone.js') }}" defer></script>
+{% else %}
+<main class="welcome">
+    <span class="mark big"><svg><use href="#i-logo"/></svg></span>
+    <h1>PyLoader</h1>
+    {% if invalid %}
+    <p class="error">Ссылка устарела: на компьютере сменили ключ доступа.</p>
+    {% endif %}
+    <p>Чтобы открыть медиатеку компьютера, отсканируй QR-код в PyLoader на компьютере: раздел <b>«На телефон»</b>.</p>
+    <ol>
+        <li>Телефон и компьютер — в одной Wi-Fi сети.</li>
+        <li>На компьютере включён «Доступ с телефона».</li>
+        <li>Камера → QR-код → открыть ссылку.</li>
+    </ol>
+    <small>PyLoader {{ version }}</small>
+</main>
+{% endif %}
+</body>
+</html>
